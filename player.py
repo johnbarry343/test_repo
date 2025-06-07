@@ -105,3 +105,20 @@ class Player:
             if self.slow_fall_duration_remaining <= 0:
                 self.slow_fall_active = False
                 self.slow_fall_duration_remaining = 0
+
+    def get_slow_fall_status_dict(self) -> dict:
+        """
+        Returns a dictionary containing the current status of the Slow Fall ability.
+        Useful for passing status to UI rendering functions.
+
+        Returns:
+            dict: A dictionary with keys 'charges', 'active', 'remaining',
+                  'progress', 'threshold'.
+        """
+        return {
+            'charges': self.slow_fall_charges,
+            'active': self.slow_fall_active,
+            'remaining': self.slow_fall_duration_remaining,
+            'progress': self.slow_fall_recharge_progress,
+            'threshold': self.slow_fall_recharge_threshold
+        }

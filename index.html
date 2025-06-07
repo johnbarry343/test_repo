@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pyodide Tetris (Canvas)</title>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+            color: #333;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 25px;
+            background-color: #fff;
+            border-radius: 10px;
+            box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+            max-width: 95%;
+            width: auto;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 25px;
+            font-size: 2em;
+        }
+        #game-canvas { /* Changed from #game-output */
+            border: 3px solid #333;
+            background-color: #1a1a1a; /* Background color for the canvas itself */
+            border-radius: 5px;
+            margin-bottom: 20px;
+            /* Dimensions will be set by JavaScript/Python */
+        }
+        #status {
+            margin-top: 10px;
+            font-style: italic;
+            color: #444;
+            font-size: 0.95em;
+            min-height: 1.2em;
+            background-color: #f9f9f9;
+            padding: 8px 15px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        .instructions {
+            margin-top: 25px;
+            font-size: 0.9em;
+            color: #555;
+            text-align: center;
+            max-width: 600px;
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <h1>Block Stacker Game (Canvas)</h1>
+        <canvas id="game-canvas"></canvas> <!-- Canvas element -->
+        <div id="status">Status: Initializing...</div>
+        <div class="instructions">
+            Controls: A/D or Left/Right Arrow (Move), W or Up Arrow (Rotate), S or Down Arrow (Soft Drop), P (Slow Fall), Q (Quit/Restart from Game Over)
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        const gameCanvasElementId = "game-canvas"; // For potential reference, though direct context is better
+        const statusElementId = "status";
+        let pyodideInstance = null;
+        let jsGameLoopActive = false;
+
+        // Canvas context and element will be initialized in mainPyodide
+        let canvas = null;
+        let ctx = null;
+
+        async function mainPyodide() {
+            const statusDiv = document.getElementById(statusElementId);
+            // Canvas setup is now here
+            canvas = document.getElementById(gameCanvasElementId);
+            if (!canvas) {
+                console.error("FATAL: Canvas element not found!");
+                statusDiv.textContent = "Error: Canvas element missing. Cannot start game.";
+                return;
+            }
+            ctx = canvas.getContext('2d');
+            if (!ctx) {
+                console.error("FATAL: Could not get 2D context from canvas.");
+                statusDiv.textContent = "Error: Canvas 2D context failed. Cannot start game.";
+                return;
+            }
+
+            // Initial placeholder text on canvas (optional)
+            canvas.width = 600; // Temp width
+            canvas.height = 400; // Temp height
+            ctx.fillStyle = "#1a1a1a";
+            ctx.fillRect(0,0,canvas.width, canvas.height);
+            ctx.fillStyle = "#f0f0f0";
+            ctx.font = "20px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("Loading Pyodide and Python game...", canvas.width / 2, canvas.height / 2);
+
+
+            if (!statusDiv) { // gameOutputDiv is replaced by canvas
+                console.error("FATAL: Status DOM element not found on page load.");
+                alert("Error: Essential page elements are missing. Cannot start game.");
+                return;
+            }
+
+            try {
+                statusDiv.textContent = "Status: Loading Pyodide runtime...";
+                console.log("Attempting to load Pyodide...");
+                pyodideInstance = await loadPyodide();
+                console.log("Pyodide loaded successfully.");
+                statusDiv.textContent = "Status: Pyodide loaded. Fetching Python files...";
+
+                const filesToFetch = ["block.py", "game_board.py", "player.py", "web_main.py"];
+                for (const file of filesToFetch) {
+                    statusDiv.textContent = `Status: Fetching ${file}...`;
+                    console.log(`Fetching ${file}...`);
+                    const response = await fetch(`./${file}`);
+                    if (!response.ok) {
+                        throw new Error(`Failed to fetch ${file}: ${response.status} ${response.statusText}`);
+                    }
+                    const pythonCode = await response.text();
+                    pyodideInstance.FS.writeFile(file, pythonCode, { encoding: "utf8" });
+                    console.log(`${file} written to Pyodide FS.`);
+                }
+                statusDiv.textContent = 'Status: All Python files fetched and loaded into Pyodide FS.';
+                console.log('All Python files fetched and loaded into Pyodide FS.');
+
+                // Expose drawing functions to Python
+                pyodideInstance.globals.set('js_clear_canvas', () => {
+                    if(ctx && canvas) ctx.clearRect(0, 0, canvas.width, canvas.height);
+                });
+                pyodideInstance.globals.set('js_draw_rect', (x, y, width, height, color) => {
+                    if(ctx) {
+                        ctx.fillStyle = color;
+                        ctx.fillRect(x, y, width, height);
+                    }
+                });
+                pyodideInstance.globals.set('js_draw_text', (text, x, y, font = '16px Arial', color = '#FFFFFF', textAlign = 'left') => {
+                    if(ctx) {
+                        ctx.fillStyle = color;
+                        ctx.font = font;
+                        ctx.textAlign = textAlign;
+                        ctx.fillText(text, x, y);
+                    }
+                });
+                pyodideInstance.globals.set('js_set_canvas_dimensions', (w, h) => {
+                    if(canvas) {
+                        canvas.width = w;
+                        canvas.height = h;
+                        console.log(`Canvas dimensions set to: ${w}x${h}`);
+                    }
+                });
+                console.log("JavaScript drawing functions exposed to Python.");
+
+                pyodideInstance.globals.set('status_element_id', statusElementId); // Still needed for status text updates
+                // game_output_element_id is no longer needed for Python as it's now canvas
+
+                statusDiv.textContent = "Status: Initializing Python game module (web_main.py)...";
+                console.log("Importing web_main Python module...");
+                let webMainModule = pyodideInstance.pyimport("web_main");
+                console.log("web_main.py imported successfully.");
+
+                if (webMainModule && typeof webMainModule.initialize_game_for_web === 'function') {
+                    console.log("Calling Python's initialize_game_for_web()...");
+                    webMainModule.initialize_game_for_web();
+                    statusDiv.textContent = "Status: Python game initialized. Starting game loop.";
+                    console.log("Python game initialized by initialize_game_for_web(). Starting JS game loop.");
+                    jsGameLoopActive = true;
+                    gameLoopJS();
+                } else {
+                    throw new Error("Python function 'initialize_game_for_web' not found. Ensure it's exposed correctly in web_main.py.");
+                }
+
+            } catch (error) {
+                console.error("Error during Pyodide setup or Python execution:", error);
+                statusDiv.textContent = "FATAL ERROR: " + error.message + " Check console (F12).";
+                if(ctx && canvas) { // Attempt to write error to canvas too
+                    ctx.fillStyle = "#1a1a1a"; ctx.fillRect(0,0,canvas.width, canvas.height);
+                    ctx.fillStyle = "red"; ctx.font = "16px Arial"; ctx.textAlign = "center";
+                    ctx.fillText("Failed to load game: " + error.message, canvas.width / 2, canvas.height / 2);
+                    ctx.fillText("Check console (F12) for details.", canvas.width / 2, canvas.height / 2 + 30);
+                }
+                jsGameLoopActive = false;
+            }
+        }
+
+        function gameLoopJS() {
+            if (!jsGameLoopActive || !pyodideInstance) {
+                return;
+            }
+            try {
+                const isGameReadyFunc = pyodideInstance.globals.get('is_game_ready_for_js');
+                if (isGameReadyFunc && isGameReadyFunc()) {
+                    const gameTickFunc = pyodideInstance.globals.get('python_game_tick');
+                    if (gameTickFunc) {
+                        gameTickFunc();
+                    } else {
+                        console.warn("JS Warning: python_game_tick function not found on pyodide.globals.");
+                        jsGameLoopActive = false;
+                    }
+                }
+            } catch (e) {
+                console.error("JS Error: Exception during python_game_tick execution:", e);
+                document.getElementById(statusElementId).textContent = "RUNTIME ERROR: " + e.message + " Check console. Loop stopped.";
+                jsGameLoopActive = false;
+            }
+
+            if(jsGameLoopActive) {
+                requestAnimationFrame(gameLoopJS);
+            }
+        }
+
+        window.addEventListener('keydown', (event) => {
+            if (pyodideInstance && jsGameLoopActive) {
+                // Let Python's is_game_ready (if called within handle_input_from_js) decide if it processes.
+                // JS just ensures it doesn't call into Python if loop is globally stopped.
+                const key = event.key;
+                const relevantKeys = [
+                    'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ',
+                    'a', 's', 'd', 'w', 'p', 'q',
+                    'A', 'S', 'D', 'W', 'P', 'Q'
+                ];
+                if (relevantKeys.includes(key)) {
+                    event.preventDefault();
+                    try {
+                        const handleInputFunc = pyodideInstance.globals.get('handle_input_from_js');
+                        if (handleInputFunc) {
+                            handleInputFunc(key);
+                        } else {
+                            console.warn("JS Warning: handle_input_from_js function not found on pyodide.globals.");
+                        }
+                    } catch (e) {
+                        console.error("JS Error: Exception calling handle_input_from_js:", e);
+                        document.getElementById(statusElementId).textContent = "INPUT ERROR: " + e.message + " Check console.";
+                    }
+                }
+            }
+        });
+        mainPyodide();
+    </script>
+</body>
+</html>
