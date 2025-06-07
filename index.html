@@ -249,7 +249,12 @@
                 }
             }
         });
-        mainPyodide();
+
+        // Start the Pyodide loading and game initialization process
+        // after the DOM is fully loaded.
+        window.onload = () => {
+            mainPyodide();
+        };
     </script>
 </body>
 </html>
